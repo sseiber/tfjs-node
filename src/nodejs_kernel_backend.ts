@@ -20,7 +20,6 @@ import {BackendTimingInfo, DataMover, DataType, fill, KernelBackend, ones, Rank,
 import {Conv2DInfo} from '@tensorflow/tfjs-core/dist/ops/conv_util';
 import {upcastType} from '@tensorflow/tfjs-core/dist/types';
 import {isNullOrUndefined} from 'util';
-
 // tslint:disable-next-line:max-line-length
 import {createTensorsTypeOpAttr, createTypeOpAttr, getTFDType} from './ops/op_utils';
 import {TensorMetadata, TFEOpAttr, TFJSBinding} from './tfjs_binding';
@@ -34,11 +33,12 @@ type TensorInfo = {
 
 interface DataId {}
 
-export class NodeJSKernelBackend implements KernelBackend {
+export class NodeJSKernelBackend extends KernelBackend {
   binding: TFJSBinding;
   private tensorMap = new WeakMap<DataId, TensorInfo>();
 
   constructor(binding: TFJSBinding) {
+    super();
     this.binding = binding;
   }
 
@@ -776,7 +776,8 @@ export class NodeJSKernelBackend implements KernelBackend {
                'DepthwiseConv2dNative', opAttrs, [input, filter]) as Tensor4D;
   }
 
-  maxPool(x: Tensor4D, convInfo: Conv2DInfo): Tensor4D {
+  private pool(x: Tensor4D, convInfo: Conv2DInfo, poolType: 'max'|'avg'):
+      Tensor4D {
     if (convInfo.padInfo.type !== 'VALID' && convInfo.padInfo.type !== 'SAME') {
       throw new Error(
           `TF Backend supports only 'valid' and 'same' padding ` +
@@ -785,18 +786,72 @@ export class NodeJSKernelBackend implements KernelBackend {
     const ksize = [1, convInfo.filterHeight, convInfo.filterWidth, 1];
     const strides = [1, convInfo.strideHeight, convInfo.strideWidth, 1];
     const padding = convInfo.padInfo.type;
+    const dilation: [number, number] =
+        [convInfo.dilationHeight, convInfo.dilationWidth];
+    let basePadding: number[][];
+    if (padding === 'SAME') {
+      basePadding = this.withSpaceToBatchBasePaddings(
+          [convInfo.filterHeight, convInfo.filterWidth], dilation);
+    } else {
+      basePadding = [[0, 0], [0, 0]];
+    }
+    const [adjustedPadding, adjustedCrops] = this.requiredSpaceToBatchPaddings(
+        [convInfo.inHeight, convInfo.inWidth], dilation, basePadding);
     const dataFormat = convInfo.dataFormat === 'channelsLast' ? 'NHWC' : 'NCHW';
     const opAttrs = [
       createTypeOpAttr('T', x.dtype),
       {name: 'ksize', type: this.binding.TF_ATTR_INT, value: ksize},
       {name: 'strides', type: this.binding.TF_ATTR_INT, value: strides},
-      {name: 'padding', type: this.binding.TF_ATTR_STRING, value: padding}, {
+      {name: 'padding', type: this.binding.TF_ATTR_STRING, value: 'VALID'}, {
         name: 'data_format',
         type: this.binding.TF_ATTR_STRING,
         value: dataFormat
       }
     ];
-    return this.executeSingleOutput('MaxPool', opAttrs, [x]) as Tensor4D;
+    const convertedX = this.spaceToBatchND(x, dilation, adjustedPadding);
+    convertedX.print();
+    const opName = poolType === 'max' ? 'MaxPool' : 'AvgPool';
+    const y =
+        this.executeSingleOutput(opName, opAttrs, [convertedX]) as Tensor4D;
+    return this.batchToSpaceND(y, dilation, adjustedCrops);
+  }
+
+  maxPool(x: Tensor4D, convInfo: Conv2DInfo): Tensor4D {
+    return this.pool(x, convInfo, 'max');
+  }
+
+  /** Calculate padding required to make block_shape divide input_shape. */
+  private requiredSpaceToBatchPaddings(
+      inputShape: [number, number], blockShape: [number, number],
+      basePadding: number[][]) {
+    const padStart = basePadding.map(b => b[0]);
+    const origPadEnd = basePadding.map(b => b[1]);
+    const fullInputShape = inputShape.concat(padStart, origPadEnd);
+    const padEndExtra =
+        blockShape.map((b, i) => (b - fullInputShape[i] % b) % b);
+    const padEnd = origPadEnd.map((s, i) => s + padEndExtra[i]);
+    const paddings = blockShape.map((_, i) => [padStart[i], padEnd[i]]);
+    const crops = blockShape.map((_, i) => [0, padEndExtra[i]]);
+    return [paddings, crops];
+  }
+
+  /** Helper function to compute base paddings. */
+  private withSpaceToBatchBasePaddings(
+      filterShape: [number, number], dilation: [number, number]) {
+    // Spatial dimensions of the filters and the upsampled filters in which we
+    // introduce (rate - 1) zeros between consecutive filter values.
+    const dilatedFilterShape = filterShape.map((s, i) => {
+      return s + (s - 1) * (dilation[i] - 1);
+    });
+    const padExtraShape = dilatedFilterShape.map(s => s - 1);
+
+    // When full_padding_shape is odd, we pad more at end, following the same
+    // convention as conv2d.
+    const padExtraStart = padExtraShape.map(s => Math.floor(s / 2));
+    const padExtraEnd = padExtraShape.map((s, i) => s - padExtraStart[i]);
+    return padExtraShape.map((_, i) => {
+      return [padExtraStart[i], padExtraEnd[i]];
+    });
   }
 
   maxPoolBackprop(dy: Tensor4D, x: Tensor4D, y: Tensor4D, convInfo: Conv2DInfo):
@@ -826,27 +881,7 @@ export class NodeJSKernelBackend implements KernelBackend {
   }
 
   avgPool(x: Tensor4D, convInfo: Conv2DInfo): Tensor4D {
-    if (convInfo.padInfo.type !== 'VALID' && convInfo.padInfo.type !== 'SAME') {
-      throw new Error(
-          `TF Backend supports only 'valid' and 'same' padding ` +
-          `while padding was ${convInfo.padInfo.type}`);
-    }
-    const ksize = [1, convInfo.filterHeight, convInfo.filterWidth, 1];
-    const strides = [1, convInfo.strideHeight, convInfo.strideWidth, 1];
-    const padding = convInfo.padInfo.type;
-    const dataFormat = convInfo.dataFormat === 'channelsLast' ? 'NHWC' : 'NCHW';
-    const opAttrs = [
-      createTypeOpAttr('T', x.dtype),
-      {name: 'ksize', type: this.binding.TF_ATTR_INT, value: ksize},
-      {name: 'strides', type: this.binding.TF_ATTR_INT, value: strides},
-      {name: 'padding', type: this.binding.TF_ATTR_STRING, value: padding},
-      {
-        name: 'data_format',
-        type: this.binding.TF_ATTR_STRING,
-        value: dataFormat
-      },
-    ];
-    return this.executeSingleOutput('AvgPool', opAttrs, [x]) as Tensor4D;
+    return this.pool(x, convInfo, 'avg');
   }
 
   avgPoolBackprop(dy: Tensor4D, x: Tensor4D, convInfo: Conv2DInfo): Tensor4D {
@@ -1174,9 +1209,9 @@ export class NodeJSKernelBackend implements KernelBackend {
     ]) as Tensor1D;
   }
 
-  fft(x: Tensor<Rank.R1>): Tensor<Rank.R1> {
+  fft(x: Tensor<Rank.R2>): Tensor<Rank.R2> {
     const opAttrs = [createTypeOpAttr('Tcomplex', 'complex64')];
-    return this.executeSingleOutput('FFT', opAttrs, [x]) as Tensor<Rank.R1>;
+    return this.executeSingleOutput('FFT', opAttrs, [x]) as Tensor<Rank.R2>;
   }
 
   complex<T extends Tensor<Rank>>(real: T, imag: T): T {
