@@ -46,7 +46,8 @@ const IGNORE_LIST: string[] = [
   'scatterND test-tensorflow {} should work for simple 1d',
   'scatterND test-tensorflow {} should work for multiple 1d',
   'scatterND test-tensorflow {} should sum the duplicated indices',
-  'scatterND test-tensorflow {} should work for tensorLike input'
+  'scatterND test-tensorflow {} should work for tensorLike input',
+  'version version is contained'  // So tests don't fail when we yalc link
 ];
 
 // Windows has two failing tests:
