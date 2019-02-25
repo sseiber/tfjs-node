@@ -126,6 +126,8 @@ async function downloadLibtensorflow(callback) {
     options.agent = new HttpsProxyAgent(proxy);
   }
 
+  console.log(`##### Going to download: ${targetUri}`);
+
   const request = https.get(options, response => {
     const bar = new ProgressBar('[:bar] :rate/bps :percent :etas', {
       complete: '=',
