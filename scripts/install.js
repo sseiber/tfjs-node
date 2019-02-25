@@ -39,7 +39,7 @@ const BASE_URI =
 const ARM_BASE_URI = 'https://iotaistorage.blob.core.windows.net/tensorflow/';
 const CPU_DARWIN = 'cpu-darwin-x86_64-1.12.0.tar.gz';
 const CPU_LINUX = 'cpu-linux-x86_64-1.12.0.tar.gz';
-const CPU_ARMV7L = 'libtensorflow.so.gz';
+const CPU_ARMV7L = 'libtensorflow_r1_12_armv7l.tar.gz';
 const GPU_LINUX = 'gpu-linux-x86_64-1.12.0.tar.gz';
 const CPU_WINDOWS = 'cpu-windows-x86_64-1.12.0.zip';
 const GPU_WINDOWS = 'gpu-windows-x86_64-1.12.0.zip';
@@ -52,26 +52,19 @@ let targetUri = BASE_URI;
 
 async function getTargetUri() {
   if (platform === 'linux') {
-    if (os.arch() === 'arm') {
-      console.log('##### linux/os.arch===arm');
-      // targetUri = 'https://storage.googleapis.com/tf-builds/libtensorflow_r1_12_linux_arm.tar.gz';
-      targetUri = ARM_BASE_URI + CPU_ARMV7L;
-    } else {
-      if (libType === 'gpu') {
-        targetUri += GPU_LINUX;
-      } else if (os.arch() === 'arm') {
-        const cpus = os.cpus();
-        const cpuModel = (cpus.length > 0 && cpus[0].model) || 'Unknown';
-        const isArmv7l = /v7l/i.test(cpuModel);
-        if (isArmv7l) {
-          targetUri = ARM_BASE_URI + CPU_ARMV7L;
-          console.log(`##### isArmV7l detected - downloading ${targetUri}`);
-        } else {
-          throw new Error(`Unsupported arm cpu: ${cpuModel}`);
-        }
+    if (libType === 'gpu') {
+      targetUri += GPU_LINUX;
+    } else if (os.arch() === 'arm') {
+      const cpus = os.cpus();
+      const cpuModel = (cpus.length > 0 && cpus[0].model) || 'Unknown';
+      const isArmv7l = /v7l/i.test(cpuModel);
+      if (isArmv7l) {
+        targetUri = ARM_BASE_URI + CPU_ARMV7L;
       } else {
-        targetUri += CPU_LINUX;
+        throw new Error(`Unsupported arm cpu: ${cpuModel}`);
       }
+    } else {
+      targetUri += CPU_LINUX;
     }
   } else if (platform === 'darwin') {
     targetUri += CPU_DARWIN;
