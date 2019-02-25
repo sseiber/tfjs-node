@@ -54,7 +54,8 @@ async function getTargetUri() {
   if (platform === 'linux') {
     if (os.arch() === 'arm') {
       console.log('##### linux/os.arch===arm');
-      targetUri = 'https://storage.googleapis.com/tf-builds/libtensorflow_r1_12_linux_arm.tar.gz';
+      // targetUri = 'https://storage.googleapis.com/tf-builds/libtensorflow_r1_12_linux_arm.tar.gz';
+      targetUri = ARM_BASE_URI + CPU_ARMV7L;
     } else {
       if (libType === 'gpu') {
         targetUri += GPU_LINUX;
