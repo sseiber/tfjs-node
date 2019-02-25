@@ -26,7 +26,7 @@ const zip = require('adm-zip');
 const cp = require('child_process');
 const os = require('os');
 const ProgressBar = require('progress');
-const {depsPath, depsLibTensorFlowPath} = require('./deps-constants.js');
+const { depsPath, depsLibTensorFlowPath } = require('./deps-constants.js');
 
 const exists = util.promisify(fs.exists);
 const mkdir = util.promisify(fs.mkdir);
@@ -35,9 +35,11 @@ const unlink = util.promisify(fs.unlink);
 const exec = util.promisify(cp.exec);
 
 const BASE_URI =
-    'https://storage.googleapis.com/tensorflow/libtensorflow/libtensorflow-';
+  'https://storage.googleapis.com/tensorflow/libtensorflow/libtensorflow-';
+const ARM_BASE_URI = 'https://iotaistorage.blob.core.windows.net/tensorflow/';
 const CPU_DARWIN = 'cpu-darwin-x86_64-1.12.0.tar.gz';
 const CPU_LINUX = 'cpu-linux-x86_64-1.12.0.tar.gz';
+const CPU_ARMV7L = 'libtensorflow.so.gz';
 const GPU_LINUX = 'gpu-linux-x86_64-1.12.0.tar.gz';
 const CPU_WINDOWS = 'cpu-windows-x86_64-1.12.0.zip';
 const GPU_WINDOWS = 'gpu-windows-x86_64-1.12.0.zip';
@@ -51,11 +53,21 @@ let targetUri = BASE_URI;
 async function getTargetUri() {
   if (platform === 'linux') {
     if (os.arch() === 'arm') {
-      targetUri =
-          'https://storage.googleapis.com/tf-builds/libtensorflow_r1_12_linux_arm.tar.gz';
+      console.log('##### linux/os.arch===arm');
+      targetUri = 'https://storage.googleapis.com/tf-builds/libtensorflow_r1_12_linux_arm.tar.gz';
     } else {
       if (libType === 'gpu') {
         targetUri += GPU_LINUX;
+      } else if (os.arch() === 'arm') {
+        const cpus = os.cpus();
+        const cpuModel = (cpus.length > 0 && cpus[0].model) || 'Unknown';
+        const isArmv7l = /v7l/i.test(cpuModel);
+        if (isArmv7l) {
+          targetUri = ARM_BASE_URI + CPU_ARMV7L;
+          console.log(`##### isArmV7l detected - downloading ${targetUri}`);
+        } else {
+          throw new Error(`Unsupported arm cpu: ${cpuModel}`);
+        }
       } else {
         targetUri += CPU_LINUX;
       }
@@ -108,13 +120,13 @@ async function downloadLibtensorflow(callback) {
 
   // If HTTPS_PROXY, https_proxy, HTTP_PROXY, or http_proxy is set
   const proxy = process.env['HTTPS_PROXY'] || process.env['https_proxy'] ||
-      process.env['HTTP_PROXY'] || process.env['http_proxy'] || '';
+    process.env['HTTP_PROXY'] || process.env['http_proxy'] || '';
 
   // Using object destructuring to construct the options object for the
   // http request.  the '...url.parse(targetUri)' part fills in the host,
   // path, protocol, etc from the targetUri and then we set the agent to the
   // default agent which is overridden a few lines down if there is a proxy
-  const options = {...url.parse(targetUri), agent: https.globalAgent};
+  const options = { ...url.parse(targetUri), agent: https.globalAgent };
 
   if (proxy !== '') {
     options.agent = new HttpsProxyAgent(proxy);
@@ -134,33 +146,33 @@ async function downloadLibtensorflow(callback) {
       const tempFileName = path.join(__dirname, '_libtensorflow.zip');
       const outputFile = fs.createWriteStream(tempFileName);
       response
-          .on('data',
-              (chunk) => {
-                bar.tick(chunk.length);
-              })
-          .pipe(outputFile)
-          .on('close', async () => {
-            const zipFile = new zip(tempFileName);
-            zipFile.extractAllTo(depsPath, true /* overwrite */);
-            await unlink(tempFileName);
+        .on('data',
+          (chunk) => {
+            bar.tick(chunk.length);
+          })
+        .pipe(outputFile)
+        .on('close', async () => {
+          const zipFile = new zip(tempFileName);
+          zipFile.extractAllTo(depsPath, true /* overwrite */);
+          await unlink(tempFileName);
 
-            if (callback !== undefined) {
-              callback();
-            }
-          });
+          if (callback !== undefined) {
+            callback();
+          }
+        });
     } else {
       // All other platforms use a tarball:
       response
-          .on('data',
-              (chunk) => {
-                bar.tick(chunk.length);
-              })
-          .pipe(tar.x({C: depsPath, strict: true}))
-          .on('close', () => {
-            if (callback !== undefined) {
-              callback();
-            }
-          });
+        .on('data',
+          (chunk) => {
+            bar.tick(chunk.length);
+          })
+        .pipe(tar.x({ C: depsPath, strict: true }))
+        .on('close', () => {
+          if (callback !== undefined) {
+            callback();
+          }
+        });
     }
     request.end();
   });
